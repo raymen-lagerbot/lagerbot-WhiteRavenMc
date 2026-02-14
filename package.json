@@ -1,17 +1,17 @@
 {
   "name": "lagerbot-whiteravenmc",
   "version": "1.0.0",
+  "description": "Discord LagerBot -> Google Sheets",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js",
     "deploy": "node deploy.js"
   },
-  "dependencies": {
-    "discord.js": "^14.17.0",
-    "dotenv": "^16.4.5"
-  },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "discord.js": "^14.0.0",
+    "dotenv": "^16.0.0"
   }
 }
