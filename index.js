@@ -3,14 +3,24 @@ require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
+  // ✅ Nur Guilds nötig (keine disallowed intents)
+  intents: [GatewayIntentBits.Guilds]
 });
 
 const SHEETS_URL = process.env.SHEETS_WEBAPP_URL;
 const ALLOWED_CHANNEL_ID = process.env.ALLOWED_CHANNEL_ID;
+
+async function sendToSheets(payload) {
+  const res = await fetch(SHEETS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const text = await res.text();
+  console.log("Sheets Antwort:", text);
+  return text;
+}
 
 client.once('ready', () => {
   console.log(`✅ Bot online als ${client.user.tag}`);
@@ -18,62 +28,52 @@ client.once('ready', () => {
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
-
   if (interaction.commandName !== 'lager') return;
 
-  // ✅ Nur bestimmter Kanal erlaubt
-  if (interaction.channelId !== ALLOWED_CHANNEL_ID) {
+  // ✅ Nur in einem bestimmten Textkanal erlauben
+  if (ALLOWED_CHANNEL_ID && interaction.channelId !== ALLOWED_CHANNEL_ID) {
     return interaction.reply({
-      content: "❌ Dieser Command darf nur im Kanal #route-buchungen benutzt werden.",
+      content: "❌ Bitte nur im Kanal #route-buchungen benutzen.",
       ephemeral: true
     });
   }
+
+  // schnelle Antwort, damit Discord nicht timeoutet
+  await interaction.deferReply({ ephemeral: true });
 
   try {
     const action = interaction.options.getString('aktion');
     const item = interaction.options.getString('item');
     const menge = interaction.options.getInteger('menge');
 
-    const userName =
-      interaction.member?.displayName ||
-      interaction.user.username;
+    // ✅ Server-Nickname (Display Name) falls vorhanden
+    const userName = interaction.member?.displayName || interaction.user.username;
 
     const payload = {
       user: userName,
       userid: interaction.user.id,
-      action: action,
-      item: item,
-      menge: menge,
-      server: interaction.guild.name,
-      channel: interaction.channel.name
+      action,
+      item,
+      menge,
+      server: interaction.guild?.name || "",
+      channel: interaction.channel?.name || ""
     };
 
     console.log("➡️ Sende an Sheets:", payload);
 
-    const res = await fetch(SHEETS_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    await sendToSheets(payload);
 
-    const text = await res.text();
-    console.log("Sheets Antwort:", text);
+    // Optional: Nachricht in den Channel posten (öffentlich)
+    // Falls du das willst, lass es drin, sonst löschen.
+    await interaction.channel.send(`✅ ${userName}: ${action} ${menge} × ${item}`);
 
-    await interaction.reply({
-      content: `✅ Gebucht: ${menge} × ${item} (${action})`,
-      ephemeral: false
-    });
+    await interaction.editReply(`✅ Gebucht: ${menge} × ${item} (${action})`);
 
   } catch (err) {
     console.error("❌ Fehler:", err);
-
-    if (!interaction.replied) {
-      await interaction.reply({
-        content: "❌ Fehler beim Buchen.",
-        ephemeral: true
-      });
-    }
+    await interaction.editReply("❌ Fehler beim Buchen (bitte Logs prüfen).");
   }
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
