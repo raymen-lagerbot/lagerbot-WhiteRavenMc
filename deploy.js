@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
-const cmd = new SlashCommandBuilder()
+const cmdLager = new SlashCommandBuilder()
   .setName('lager')
   .setDescription('Lager buchen')
   .addStringOption(o =>
@@ -25,17 +25,32 @@ const cmd = new SlashCommandBuilder()
       .setDescription('Menge')
       .setRequired(true));
 
-const rest = new REST({ version: '10' })
-  .setToken(process.env.DISCORD_TOKEN);
+const cmdReport = new SlashCommandBuilder()
+  .setName('wochenreport')
+  .setDescription('Zeigt Wochenreport aus Google Sheets')
+  .addStringOption(o =>
+    o.setName('week')
+      .setDescription('Optional: z.B. 2026-07 (leer = aktuelle Woche)')
+      .setRequired(false));
+
+const cmdPaid = new SlashCommandBuilder()
+  .setName('ausbezahlt')
+  .setDescription('Markiert einen User als ausbezahlt (ARCHIV)')
+  .addStringOption(o =>
+    o.setName('user')
+      .setDescription('User-Name wie im AUSWERTUNG/ARCHIV (z.B. Raymen)')
+      .setRequired(true))
+  .addStringOption(o =>
+    o.setName('week')
+      .setDescription('Optional: z.B. 2026-07 (leer = aktuelle Woche)')
+      .setRequired(false));
+
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
 (async () => {
   await rest.put(
-    Routes.applicationGuildCommands(
-      process.env.CLIENT_ID,
-      process.env.GUILD_ID
-    ),
-    { body: [cmd.toJSON()] }
+    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+    { body: [cmdLager.toJSON(), cmdReport.toJSON(), cmdPaid.toJSON()] }
   );
-
-  console.log("Commands bereit");
+  console.log("✅ Commands bereit");
 })();
