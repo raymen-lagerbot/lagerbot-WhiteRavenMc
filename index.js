@@ -2,7 +2,7 @@ require("dotenv").config();
 const { Client, GatewayIntentBits } = require("discord.js");
 const cron = require("node-cron");
 
-// fetch fix für Railway / Node
+// fetch fix (Railway / Node sicher)
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
@@ -29,7 +29,6 @@ async function post(payload) {
       ...payload
     })
   });
-
   return res.json();
 }
 
@@ -38,14 +37,21 @@ client.on("interactionCreate", async (i) => {
   if (i.commandName !== "lager") return;
 
   try {
-    // Sofort antworten → verhindert "reagiert nicht"
+    // sofort antworten → verhindert Timeout
     await i.deferReply({ ephemeral: true });
 
     if (!ROUTE_CHANNEL_IDS.includes(i.channelId)) {
       return i.editReply("❌ /lager nur in Lager-Kanälen erlaubt.");
     }
 
-    const sub = i.options.getSubcommand();
+    const sub = i.options.getSubcommand(false);
+
+    if (!sub) {
+      return i.editReply(
+        "❌ Bitte Subcommand wählen: injektion-rein / injektion-raus / blue-rein / blue-raus / wochen-abgabe"
+      );
+    }
+
     const menge = i.options.getInteger("menge");
     const typ = i.options.getString("typ");
 
@@ -65,7 +71,7 @@ client.on("interactionCreate", async (i) => {
     }
 
     if (!type) {
-      return i.editReply("❌ Unbekannter Subcommand.");
+      return i.editReply("❌ Ungültiger Subcommand.");
     }
 
     const result = await post({
@@ -81,7 +87,7 @@ client.on("interactionCreate", async (i) => {
       return i.editReply(`❌ Sheet Fehler: ${result.error || "unknown"}`);
     }
 
-    // Weekly Summary aktualisieren (Anzeige)
+    // Anzeige aktualisieren
     await post({ action: "writeWeeklySummary" });
 
     return i.editReply(`✅ Gebucht: ${type} ${amount}`);
@@ -98,18 +104,23 @@ client.on("interactionCreate", async (i) => {
   }
 });
 
-// Wochenwechsel Automatik — Montag 00:05
-cron.schedule("5 0 * * 1", async () => {
-  try {
-    await post({ action: "rolloverWeek" });
-    console.log("📦 Woche archiviert");
-  } catch (e) {
-    console.error("❌ Weekly rollover Fehler:", e);
-  }
-}, { timezone: "Europe/Zurich" });
+// Wochenwechsel Automatik
+cron.schedule(
+  "5 0 * * 1",
+  async () => {
+    try {
+      await post({ action: "rolloverWeek" });
+      console.log("📦 Woche archiviert");
+    } catch (e) {
+      console.error("❌ Weekly rollover Fehler:", e);
+    }
+  },
+  { timezone: "Europe/Zurich" }
+);
 
 client.once("ready", () => {
   console.log(`🤖 Lagerbot online als ${client.user.tag}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
