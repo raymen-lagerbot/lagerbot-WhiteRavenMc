@@ -2,24 +2,27 @@ require("dotenv").config();
 const { Client, GatewayIntentBits } = require("discord.js");
 const cron = require("node-cron");
 
-// fetch fix (Railway / Node sicher)
+// fetch fix für Railway / Node
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
+/* ======== DEINE ERLAUBTEN CHANNELS ======== */
 const ROUTE_CHANNEL_IDS = [
-  "1471986598886510653",
-  "1471986731484975135",
-  "1472654099110563880",
-  "1472654198779674769",
-  "1472703728757772552",
-  "1472339361789116589",
-  "1472703883854872586"
+  "1471986598886510653", // injektion-rein
+  "1471986731484975135", // injektion-raus
+  "1472654099110563880", // blue-rein
+  "1472654198779674769", // blue-raus
+  "1472703728757772552", // ausbezahlt
+  "1472339361789116589", // wochen-abgabe
+  "1472703883854872586"  // routen-buchungen
 ];
 
+/* ======== DISCORD CLIENT ======== */
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
 
+/* ======== APPS SCRIPT POST ======== */
 async function post(payload) {
   const res = await fetch(process.env.APPS_SCRIPT_URL, {
     method: "POST",
@@ -29,31 +32,47 @@ async function post(payload) {
       ...payload
     })
   });
-  return res.json();
+
+  const text = await res.text();
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {
+      ok: false,
+      error: `AppsScript kein JSON. Status=${res.status} Body=${text.slice(0,200)}`
+    };
+  }
 }
 
+/* ======== INTERACTIONS ======== */
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
   if (i.commandName !== "lager") return;
 
   try {
-    // sofort antworten → verhindert Timeout
     await i.deferReply({ ephemeral: true });
 
     if (!ROUTE_CHANNEL_IDS.includes(i.channelId)) {
-      return i.editReply("❌ /lager nur in Lager-Kanälen erlaubt.");
+      return i.editReply("❌ Nur in Lager-Kanälen erlaubt.");
     }
 
     const sub = i.options.getSubcommand(false);
-
     if (!sub) {
       return i.editReply(
-        "❌ Bitte Subcommand wählen: injektion-rein / injektion-raus / blue-rein / blue-raus / wochen-abgabe"
+        "❌ Subcommand wählen: injektion-rein / injektion-raus / blue-rein / blue-raus / wochen-abgabe"
       );
     }
 
     const menge = i.options.getInteger("menge");
     const typ = i.options.getString("typ");
+
+    /* ======== SERVER DISPLAY NAME ======== */
+    const memberName =
+      i.member?.nickname ||
+      i.member?.user?.globalName ||
+      i.user.globalName ||
+      i.user.username;
 
     let type = null;
     let amount = menge || 0;
@@ -77,24 +96,24 @@ client.on("interactionCreate", async (i) => {
     const result = await post({
       action: "addTransaction",
       discordId: i.user.id,
-      name: i.user.username,
+      name: memberName,
       channel: i.channel?.name || i.channelId,
       type,
       amount
     });
 
     if (!result.ok) {
-      return i.editReply(`❌ Sheet Fehler: ${result.error || "unknown"}`);
+      return i.editReply(`❌ Sheet Fehler: ${result.error}`);
     }
 
-    // Anzeige aktualisieren
     await post({ action: "writeWeeklySummary" });
 
     return i.editReply(`✅ Gebucht: ${type} ${amount}`);
-  } catch (err) {
-    console.error("❌ Interaction Error:", err);
 
-    const msg = `❌ Bot Fehler: ${String(err).slice(0, 1500)}`;
+  } catch (err) {
+    console.error("Interaction Error:", err);
+
+    const msg = `❌ Bot Fehler: ${String(err).slice(0,1500)}`;
 
     if (i.deferred || i.replied) {
       return i.editReply(msg);
@@ -104,7 +123,7 @@ client.on("interactionCreate", async (i) => {
   }
 });
 
-// Wochenwechsel Automatik
+/* ======== WOCHEN-ROLLOVER ======== */
 cron.schedule(
   "5 0 * * 1",
   async () => {
@@ -112,15 +131,16 @@ cron.schedule(
       await post({ action: "rolloverWeek" });
       console.log("📦 Woche archiviert");
     } catch (e) {
-      console.error("❌ Weekly rollover Fehler:", e);
+      console.error("Weekly rollover Fehler:", e);
     }
   },
   { timezone: "Europe/Zurich" }
 );
 
+/* ======== READY ======== */
 client.once("ready", () => {
   console.log(`🤖 Lagerbot online als ${client.user.tag}`);
 });
 
+/* ======== LOGIN ======== */
 client.login(process.env.DISCORD_TOKEN);
-
