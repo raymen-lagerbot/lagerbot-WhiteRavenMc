@@ -1,15 +1,14 @@
 {
-  "name": "lagerbot-whiteravenmc",
+  "name": "lagerbot",
   "version": "1.0.0",
-  "description": "Discord Lagerbot for WhiteRavenMc",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "deploy": "node deploy.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "dotenv": "^16.4.5",
-    "node-fetch": "^3.3.2"
+    "discord.js": "^14.0.3",
+    "dotenv": "^16.0.0",
+    "node-fetch": "^3.3.1"
   }
 }
