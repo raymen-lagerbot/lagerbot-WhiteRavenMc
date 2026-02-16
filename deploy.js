@@ -58,6 +58,21 @@ const command = new SlashCommandBuilder()
             { name: "X", value: "X" }
           )
       )
+  )
+
+  .addSubcommand(sc =>
+    sc.setName("ausbezahlt")
+      .setDescription("Markiert einen Member als ausbezahlt (für diese KW)")
+      .addUserOption(o =>
+        o.setName("user")
+          .setDescription("Wer wurde ausbezahlt?")
+          .setRequired(true)
+      )
+      .addIntegerOption(o =>
+        o.setName("betrag")
+          .setDescription("Optionaler Betrag (nur Info)")
+          .setRequired(false)
+      )
   );
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
@@ -71,7 +86,6 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
       ),
       { body: [command.toJSON()] }
     );
-
     console.log("✅ /lager Commands erfolgreich registriert");
   } catch (e) {
     console.error("❌ Deploy Fehler:", e);
