@@ -5,6 +5,7 @@ const command = new SlashCommandBuilder()
   .setName("lager")
   .setDescription("WRMC Lager Buchung")
 
+  // Injektion rein
   .addSubcommand(sc =>
     sc.setName("injektion-rein")
       .setDescription("Injektion Eingang buchen")
@@ -15,6 +16,7 @@ const command = new SlashCommandBuilder()
       )
   )
 
+  // Injektion raus
   .addSubcommand(sc =>
     sc.setName("injektion-raus")
       .setDescription("Injektion Ausgang buchen")
@@ -25,6 +27,7 @@ const command = new SlashCommandBuilder()
       )
   )
 
+  // Blue rein
   .addSubcommand(sc =>
     sc.setName("blue-rein")
       .setDescription("Blaupulver Eingang buchen")
@@ -35,6 +38,7 @@ const command = new SlashCommandBuilder()
       )
   )
 
+  // Blue raus
   .addSubcommand(sc =>
     sc.setName("blue-raus")
       .setDescription("Blaupulver Ausgang buchen")
@@ -45,12 +49,13 @@ const command = new SlashCommandBuilder()
       )
   )
 
+  // Wochenabgabe (A/B/X)
   .addSubcommand(sc =>
     sc.setName("wochen-abgabe")
-      .setDescription("Wochenabgabe setzen")
+      .setDescription("Wochenabgabe setzen (A/B/X)")
       .addStringOption(o =>
         o.setName("typ")
-          .setDescription("A / B / X")
+          .setDescription("A = Pulver 1000, B = Schwarzgeld, X = Befreit")
           .setRequired(true)
           .addChoices(
             { name: "A", value: "A" },
@@ -60,6 +65,7 @@ const command = new SlashCommandBuilder()
       )
   )
 
+  // AUSBEZAHLT (User auswählen)
   .addSubcommand(sc =>
     sc.setName("ausbezahlt")
       .setDescription("Markiert einen Member als ausbezahlt (für diese KW)")
@@ -79,14 +85,16 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
 (async () => {
   try {
+    if (!process.env.DISCORD_CLIENT_ID) throw new Error("DISCORD_CLIENT_ID fehlt");
+    if (!process.env.GUILD_ID) throw new Error("GUILD_ID fehlt");
+    if (!process.env.DISCORD_TOKEN) throw new Error("DISCORD_TOKEN fehlt");
+
     await rest.put(
-      Routes.applicationGuildCommands(
-        process.env.DISCORD_CLIENT_ID,
-        process.env.GUILD_ID
-      ),
+      Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.GUILD_ID),
       { body: [command.toJSON()] }
     );
-    console.log("✅ /lager Commands erfolgreich registriert");
+
+    console.log("✅ /lager Commands erfolgreich registriert (inkl. ausbezahlt)");
   } catch (e) {
     console.error("❌ Deploy Fehler:", e);
   }
