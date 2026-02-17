@@ -8,6 +8,7 @@ const fetch = (...args) =>
 
 /* ========= CHANNEL CONFIG ========= */
 
+// Lager-Buchungs-Channels (deine 7 IDs)
 const ROUTE_CHANNEL_IDS = [
   "1471986598886510653", // injektion-rein
   "1471986731484975135", // injektion-raus
@@ -18,8 +19,17 @@ const ROUTE_CHANNEL_IDS = [
   "1472703883854872586"  // routen-buchungen
 ];
 
+// Deine neuen Channels
 const REPORT_CHANNEL_ID = "1473018767071252521"; // lager-reports
 const ADMIN_CHANNEL_ID  = "1473018857626272018"; // lager-admin
+
+// Rollen, die Report/Config/Ausbezahlt dürfen (EXAKT wie Discord Rollennamen!)
+const ADMIN_ROLES = [
+  "President",
+  "Vice President",
+  "Treasurer",
+  "MC-Leitung"
+];
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -45,6 +55,8 @@ async function post(payload) {
 
 function getBestName(i, user) {
   if (!user) return "Unknown";
+
+  // ausführender User
   if (i.user?.id === user.id) {
     return (
       i.member?.nickname ||
@@ -53,20 +65,38 @@ function getBestName(i, user) {
       i.user.username
     );
   }
+
+  // target user (ausbezahlt)
   const cached = i.guild?.members?.cache?.get(user.id);
   return cached?.nickname || user.globalName || user.username;
 }
 
-async function sendReportToChannel(guild, embed) {
-  const ch = await guild.channels.fetch(REPORT_CHANNEL_ID).catch(() => null);
-  if (!ch) return false;
-  await ch.send({ embeds: [embed] });
-  return true;
+function hasAnyRole(i, roleNames) {
+  const roles = i.member?.roles?.cache;
+  if (!roles) return false;
+  const lower = roleNames.map(r => r.toLowerCase());
+  return roles.some(r => lower.includes(String(r.name).toLowerCase()));
 }
 
 function money(n) {
   const num = Number(n || 0);
   return num.toLocaleString("de-CH");
+}
+
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+async function sendEmbedsToReports(guild, embeds) {
+  const ch = await guild.channels.fetch(REPORT_CHANNEL_ID).catch(() => null);
+  if (!ch) return false;
+
+  for (const e of embeds) {
+    await ch.send({ embeds: [e] });
+  }
+  return true;
 }
 
 client.on("interactionCreate", async (i) => {
@@ -81,11 +111,13 @@ client.on("interactionCreate", async (i) => {
 
     const actorName = getBestName(i, i.user);
 
-    /* ====== CONFIG (Admin empfohlen, aber nicht zwingend) ====== */
+    /* ====== CONFIG ====== */
     if (sub === "config") {
-      // Optional: nur admin channel
       if (i.channelId !== ADMIN_CHANNEL_ID) {
-        return i.editReply("❌ /lager config bitte im #lager-admin verwenden.");
+        return i.editReply("❌ /lager config bitte im **#lager-admin** verwenden.");
+      }
+      if (!hasAnyRole(i, ADMIN_ROLES)) {
+        return i.editReply("❌ Keine Berechtigung (nur Leitung/Kasse).");
       }
 
       const cfg = await post({ action: "getConfig" });
@@ -99,16 +131,18 @@ client.on("interactionCreate", async (i) => {
         `⚙️ **Aktuelle Config**\n` +
         `• Preis pro Pulver: **${price}**\n` +
         `• Schwarzgeld: **${cut}%**\n` +
-        `• Mindest-Abgabe (pro Member): **${min} Pulver**\n` +
-        `\nÄndern: Apps Script → Projekt-Einstellungen → Script Properties`
+        `• Mindest-Abgabe (pro Member): **${min} Pulver**\n\n` +
+        `Ändern: Apps Script → Projekt-Einstellungen → Script Properties`
       );
     }
 
     /* ====== REPORT ====== */
     if (sub === "report") {
-      // Optional: nur admin channel
       if (i.channelId !== ADMIN_CHANNEL_ID) {
-        return i.editReply("❌ /lager report bitte im #lager-admin verwenden.");
+        return i.editReply("❌ /lager report bitte im **#lager-admin** verwenden.");
+      }
+      if (!hasAnyRole(i, ADMIN_ROLES)) {
+        return i.editReply("❌ Keine Berechtigung (nur Leitung/Kasse).");
       }
 
       const kw = i.options.getInteger("kw") || undefined;
@@ -133,10 +167,8 @@ client.on("interactionCreate", async (i) => {
       let totalGross = 0;
       let totalPayoutablePulver = 0;
 
-      // Textzeilen (kurz halten)
-      const lines = rows
-        .sort((a, b) => (Number(b.payout_net || 0) - Number(a.payout_net || 0)))
-        .slice(0, 25)
+      const allLines = rows
+        .sort((a, b) => Number(b.payout_net || 0) - Number(a.payout_net || 0))
         .map(r => {
           totalNet += Number(r.payout_net || 0);
           totalSchwarz += Number(r.schwarzgeld_20 || 0);
@@ -145,37 +177,52 @@ client.on("interactionCreate", async (i) => {
 
           const paid = r.paid ? "✅" : "⏳";
           const name = r.name || "Unbekannt";
-          const payoutNet = money(r.payout_net || 0);
           const abg = r.wochenabgabe || "-";
           const pPulver = money(r.payoutable_pulver || 0);
+          const payoutNet = money(r.payout_net || 0);
+          const paidAt = r.paid ? (r.paidAt ? ` • ${r.paidAt}` : "") : "";
 
-          return `${paid} **${name}** • Abgabe: **${abg}** • Auszahlbar: **${pPulver}** • Netto: **${payoutNet}**`;
+          return `${paid} **${name}** • Abgabe: **${abg}** • Auszahlbar: **${pPulver}** • Netto: **${payoutNet}**${paidAt}`;
         });
 
-      const embed = new EmbedBuilder()
-        .setTitle(`📊 WRMC Wochenreport (KW ${usedKw})`)
-        .setDescription(
-          `Preis: **${price}** • Cut: **${cut}%** • Mindest: **${min} Pulver**\n` +
-          `\n${lines.length ? lines.join("\n") : "_Keine Daten für diese KW_"}`
-        )
-        .addFields(
-          { name: "Summe (Brutto)", value: money(totalGross), inline: true },
-          { name: "Summe Schwarzgeld", value: money(totalSchwarz), inline: true },
-          { name: "Summe Auszahlung (Netto)", value: money(totalNet), inline: true },
-          { name: "Auszahlbares Pulver", value: money(totalPayoutablePulver), inline: true }
-        )
-        .setFooter({ text: `Ausgelöst von: ${actorName}` });
+      const parts = chunk(allLines.length ? allLines : ["_Keine Daten für diese KW_"], 25);
+      const embeds = [];
 
-      const ok = await sendReportToChannel(i.guild, embed);
-      if (!ok) return i.editReply("❌ Konnte nicht in #lager-reports posten (Channel ID/Rechte prüfen).");
+      for (let p = 0; p < parts.length; p++) {
+        const partEmbed = new EmbedBuilder()
+          .setTitle(`📊 WRMC Wochenreport (KW ${usedKw})${parts.length > 1 ? ` • Teil ${p + 1}/${parts.length}` : ""}`)
+          .setDescription(
+            `Preis: **${price}** • Cut: **${cut}%** • Mindest: **${min} Pulver**\n\n` +
+            parts[p].join("\n")
+          )
+          .setFooter({ text: `Ausgelöst von: ${actorName}` });
+
+        // Summen nur im ersten Embed
+        if (p === 0) {
+          partEmbed.addFields(
+            { name: "Summe (Brutto)", value: money(totalGross), inline: true },
+            { name: "Summe Schwarzgeld", value: money(totalSchwarz), inline: true },
+            { name: "Summe Auszahlung (Netto)", value: money(totalNet), inline: true },
+            { name: "Auszahlbares Pulver", value: money(totalPayoutablePulver), inline: true }
+          );
+        }
+
+        embeds.push(partEmbed);
+      }
+
+      const ok = await sendEmbedsToReports(i.guild, embeds);
+      if (!ok) return i.editReply("❌ Konnte nicht in **#lager-reports** posten (Rechte/ID prüfen).");
 
       return i.editReply("✅ Report wurde in **#lager-reports** gepostet.");
     }
 
-    /* ===== AUSBEZAHLT NUR ADMIN CHANNEL ===== */
+    /* ===== AUSBEZAHLT ===== */
     if (sub === "ausbezahlt") {
       if (i.channelId !== ADMIN_CHANNEL_ID) {
         return i.editReply("❌ Dieser Befehl nur im **#lager-admin** Kanal.");
+      }
+      if (!hasAnyRole(i, ADMIN_ROLES)) {
+        return i.editReply("❌ Keine Berechtigung (nur Leitung/Kasse).");
       }
 
       const targetUser = i.options.getUser("user", true);
