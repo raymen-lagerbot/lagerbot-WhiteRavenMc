@@ -1,35 +1,43 @@
 require("dotenv").config();
 const {
-  Client, GatewayIntentBits,
-  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } = require("discord.js");
 const cron = require("node-cron");
 
 const fetch = (...args) =>
   import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
-/* ========= CONFIG ========= */
+/* ========= CHANNEL CONFIG ========= */
 
+// Lager-Buchungs-Channels (deine 7 IDs)
 const ROUTE_CHANNEL_IDS = [
-  "1471986598886510653",
-  "1471986731484975135",
-  "1472654099110563880",
-  "1472654198779674769",
-  "1472703728757772552",
-  "1472339361789116589",
-  "1472703883854872586"
+  "1471986598886510653", // injektion-rein
+  "1471986731484975135", // injektion-raus
+  "1472654099110563880", // blue-rein
+  "1472654198779674769", // blue-raus
+  "1472703728757772552", // ausbezahlt (alt)
+  "1472339361789116589", // wochen-abgabe
+  "1472703883854872586"  // routen-buchungen
 ];
 
-const REPORT_CHANNEL_ID = "1473018767071252521";
-const ADMIN_CHANNEL_ID  = "1473018857626272018";
+// Deine neuen Channels
+const REPORT_CHANNEL_ID = "1473018767071252521"; // lager-reports
+const ADMIN_CHANNEL_ID  = "1473018857626272018"; // lager-admin
 
-/* ✅ HIER DEINE ROLLEN IDs EINTRAGEN */
+// ✅ Deine Rollen-IDs (stabil)
 const ADMIN_ROLE_IDS = [
-  "ROLE_ID_LEITUNG",
-  "ROLE_ID_BUCHHALTUNG"
+  "1473402644843200532", // Leitung
+  "1473406736370241709"  // Buchhaltung
 ];
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
 
 /* ========= APPS SCRIPT API ========= */
 
@@ -37,16 +45,24 @@ async function post(payload) {
   const res = await fetch(process.env.APPS_SCRIPT_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: process.env.API_TOKEN, ...payload })
+    body: JSON.stringify({
+      token: process.env.API_TOKEN,
+      ...payload
+    })
   });
+
   const text = await res.text();
-  try { return JSON.parse(text); }
-  catch { return { ok:false, error:text }; }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { ok: false, error: `AppsScript kein JSON: ${text.slice(0, 200)}` };
+  }
 }
 
-async function getState() {
-  const r = await post({ action:"getBotState" });
-  return r.ok ? r.data : { paused:false };
+async function getBotState() {
+  const r = await post({ action: "getBotState" });
+  if (!r.ok) return { paused: false, reason: "" }; // Fallback: lieber nicht blocken
+  return r.data || { paused: false, reason: "" };
 }
 
 /* ========= HELPERS ========= */
@@ -57,200 +73,343 @@ function hasAdminRole(i) {
   return roles.some(r => ADMIN_ROLE_IDS.includes(r.id));
 }
 
-function getName(i,u){
-  if(i.user.id===u.id)
-    return i.member?.nickname || u.globalName || u.username;
-  const m=i.guild.members.cache.get(u.id);
-  return m?.nickname || u.globalName || u.username;
+function getBestName(i, user) {
+  if (!user) return "Unknown";
+
+  // actor
+  if (i.user?.id === user.id) {
+    return (
+      i.member?.nickname ||
+      i.member?.user?.globalName ||
+      i.user.globalName ||
+      i.user.username
+    );
+  }
+
+  // target
+  const cached = i.guild?.members?.cache?.get(user.id);
+  return cached?.nickname || user.globalName || user.username;
 }
 
-function money(n){ return Number(n||0).toLocaleString("de-CH"); }
+function money(n) {
+  const num = Number(n || 0);
+  return num.toLocaleString("de-CH");
+}
 
-function chunk(a,s){const o=[];for(let i=0;i<a.length;i+=s)o.push(a.slice(i,i+s));return o;}
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
-/* ========= PANEL ========= */
+/* ========= PANEL UI ========= */
 
-function panelEmbed(state){
+function buildPanelEmbed(state) {
+  const paused = !!state?.paused;
+  const reason = state?.reason ? `\nGrund: **${state.reason}**` : "";
+
   return new EmbedBuilder()
-    .setTitle("🧾 Wochenabschluss Panel")
+    .setTitle("🧾 WRMC Wochenabschluss Panel")
     .setDescription(
-      state.paused
-        ? `⏸ Prüfmodus aktiv\nGrund: ${state.reason||"-"}`
-        : "✅ Normalbetrieb"
+      paused
+        ? `Status: **⏸ Prüfmodus aktiv** (Buchungen nur Leitung/Buchhaltung).${reason}`
+        : `Status: **✅ Normalbetrieb** (alle können buchen).`
     );
 }
 
-function panelButtons(state){
+function buildPanelButtons(state) {
+  const paused = !!state?.paused;
+
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("pause")
-      .setLabel("⏸ Pause")
+      .setCustomId("lager_pause")
+      .setLabel(paused ? "⏸ Prüfmodus läuft" : "⏸ Prüfmodus (Pause)")
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(state.paused),
+      .setDisabled(paused),
 
     new ButtonBuilder()
-      .setCustomId("resume")
-      .setLabel("▶ Weiter")
-      .setStyle(ButtonStyle.Primary),
+      .setCustomId("lager_finalize_restart")
+      .setLabel("✅ Abschluss & Neustart")
+      .setStyle(ButtonStyle.Success),
 
     new ButtonBuilder()
-      .setCustomId("final")
-      .setLabel("✅ Abschluss + Neustart")
-      .setStyle(ButtonStyle.Success)
+      .setCustomId("lager_resume")
+      .setLabel("▶️ Weiter (Pause aus)")
+      .setStyle(ButtonStyle.Primary)
   );
+}
+
+/* ========= SEND REPORT EMBEDS ========= */
+
+async function sendEmbedsToReports(guild, embeds) {
+  const ch = await guild.channels.fetch(REPORT_CHANNEL_ID).catch(() => null);
+  if (!ch) return false;
+
+  for (const e of embeds) {
+    await ch.send({ embeds: [e] });
+  }
+  return true;
 }
 
 /* ========= INTERACTIONS ========= */
 
-client.on("interactionCreate", async i=>{
-try{
+client.on("interactionCreate", async (i) => {
+  try {
+    /* ===== BUTTONS ===== */
+    if (i.isButton()) {
+      if (i.channelId !== ADMIN_CHANNEL_ID) {
+        return i.reply({ content: "❌ Buttons nur im #lager-admin.", ephemeral: true });
+      }
+      if (!hasAdminRole(i)) {
+        return i.reply({ content: "❌ Keine Berechtigung (nur Leitung/Buchhaltung).", ephemeral: true });
+      }
 
-/* ---------- BUTTONS ---------- */
+      await i.deferReply({ ephemeral: true });
 
-if(i.isButton()){
-  if(i.channelId!==ADMIN_CHANNEL_ID)
-    return i.reply({content:"❌ Nur #lager-admin",ephemeral:true});
-  if(!hasAdminRole(i))
-    return i.reply({content:"❌ Keine Berechtigung",ephemeral:true});
+      if (i.customId === "lager_pause") {
+        const r = await post({ action: "setBotPaused", paused: true, reason: "Prüfung / Abrechnung" });
+        if (!r.ok) return i.editReply(`❌ Fehler: ${r.error}`);
 
-  await i.deferReply({ephemeral:true});
+        const st = await getBotState();
+        await i.message.edit({ embeds: [buildPanelEmbed(st)], components: [buildPanelButtons(st)] });
 
-  if(i.customId==="pause"){
-    await post({action:"setBotPaused",paused:true,reason:"Prüfung"});
+        return i.editReply("✅ Prüfmodus aktiviert. Normale Member können nicht mehr buchen.");
+      }
+
+      if (i.customId === "lager_resume") {
+        const r = await post({ action: "setBotPaused", paused: false, reason: "" });
+        if (!r.ok) return i.editReply(`❌ Fehler: ${r.error}`);
+
+        const st = await getBotState();
+        await i.message.edit({ embeds: [buildPanelEmbed(st)], components: [buildPanelButtons(st)] });
+
+        return i.editReply("✅ Prüfmodus deaktiviert. Normalbetrieb wieder aktiv.");
+      }
+
+      if (i.customId === "lager_finalize_restart") {
+        const arch = await post({ action: "rolloverWeek" });
+        if (!arch.ok) return i.editReply(`❌ Archiv Fehler: ${arch.error}`);
+
+        const r = await post({ action: "setBotPaused", paused: false, reason: "" });
+        if (!r.ok) return i.editReply(`❌ Pause Fehler: ${r.error}`);
+
+        const st = await getBotState();
+        await i.message.edit({ embeds: [buildPanelEmbed(st)], components: [buildPanelButtons(st)] });
+
+        return i.editReply(`✅ Woche abgeschlossen & neu gestartet. Archiviert: KW **${arch.archivedKw ?? "?"}**`);
+      }
+
+      return i.editReply("❌ Unbekannter Button.");
+    }
+
+    /* ===== SLASH COMMANDS ===== */
+    if (!i.isChatInputCommand()) return;
+    if (i.commandName !== "lager") return;
+
+    await i.deferReply({ ephemeral: true });
+
+    const sub = i.options.getSubcommand(false);
+    if (!sub) return i.editReply("❌ Subcommand fehlt.");
+
+    const actorName = getBestName(i, i.user);
+    const isAdmin = hasAdminRole(i);
+
+    // ✅ Pause: block für normale Member
+    const state = await getBotState();
+    if (state.paused && !isAdmin) {
+      return i.editReply("⏸ **Prüfmodus aktiv** – bitte warten, Buchungen sind vorübergehend gesperrt.");
+    }
+
+    // Admin-only subs
+    const adminOnlySubs = new Set(["config", "report", "ausbezahlt", "panel"]);
+    if (adminOnlySubs.has(sub)) {
+      if (i.channelId !== ADMIN_CHANNEL_ID) {
+        return i.editReply("❌ Bitte im **#lager-admin** verwenden.");
+      }
+      if (!isAdmin) {
+        return i.editReply("❌ Keine Berechtigung (nur Leitung/Buchhaltung).");
+      }
+    }
+
+    /* ===== PANEL ===== */
+    if (sub === "panel") {
+      const st = await getBotState();
+      await i.channel.send({ embeds: [buildPanelEmbed(st)], components: [buildPanelButtons(st)] });
+      return i.editReply("✅ Panel wurde im **#lager-admin** gepostet.");
+    }
+
+    /* ===== CONFIG ===== */
+    if (sub === "config") {
+      const cfg = await post({ action: "getConfig" });
+      if (!cfg.ok) return i.editReply(`❌ Sheet Fehler: ${cfg.error}`);
+
+      const price = cfg.data?.PRICE_PER_PULVER ?? 225;
+      const cut = cfg.data?.CUT_PERCENT ?? 20;
+      const min = cfg.data?.MIN_ABGABE_PULVER ?? 1000;
+
+      return i.editReply(
+        `⚙️ **Aktuelle Config**\n` +
+        `• Preis pro Pulver: **${price}**\n` +
+        `• Schwarzgeld: **${cut}%**\n` +
+        `• Mindest-Abgabe: **${min} Pulver**`
+      );
+    }
+
+    /* ===== REPORT ===== */
+    if (sub === "report") {
+      const kw = i.options.getInteger("kw") || undefined;
+
+      const [cfg, sum] = await Promise.all([
+        post({ action: "getConfig" }),
+        post({ action: "getWeeklySummary", kw })
+      ]);
+
+      if (!sum.ok) return i.editReply(`❌ Sheet Fehler: ${sum.error}`);
+
+      const rows = Array.isArray(sum.data) ? sum.data : [];
+      const usedKw = sum.kw ?? kw ?? "?";
+
+      const price = cfg.ok ? (cfg.data?.PRICE_PER_PULVER ?? 225) : 225;
+      const cut = cfg.ok ? (cfg.data?.CUT_PERCENT ?? 20) : 20;
+      const min = cfg.ok ? (cfg.data?.MIN_ABGABE_PULVER ?? 1000) : 1000;
+
+      let totalNet = 0;
+      let totalSchwarz = 0;
+      let totalGross = 0;
+      let totalPayoutablePulver = 0;
+
+      const allLines = rows
+        .sort((a, b) => Number(b.payout_net || 0) - Number(a.payout_net || 0))
+        .map(r => {
+          totalNet += Number(r.payout_net || 0);
+          totalSchwarz += Number(r.schwarzgeld_20 || 0);
+          totalGross += Number(r.payout_gross || 0);
+          totalPayoutablePulver += Number(r.payoutable_pulver || 0);
+
+          const paid = r.paid ? "✅" : "⏳";
+          const name = r.name || "Unbekannt";
+          const abg = r.wochenabgabe || "-";
+          const pPulver = money(r.payoutable_pulver || 0);
+          const payoutNet = money(r.payout_net || 0);
+          const paidAt = r.paid ? (r.paidAt ? ` • ${r.paidAt}` : "") : "";
+
+          return `${paid} **${name}** • Abgabe: **${abg}** • Auszahlbar: **${pPulver}** • Netto: **${payoutNet}**${paidAt}`;
+        });
+
+      const parts = chunk(allLines.length ? allLines : ["_Keine Daten für diese KW_"], 25);
+      const embeds = [];
+
+      for (let p = 0; p < parts.length; p++) {
+        const partEmbed = new EmbedBuilder()
+          .setTitle(`📊 WRMC Wochenreport (KW ${usedKw})${parts.length > 1 ? ` • Teil ${p + 1}/${parts.length}` : ""}`)
+          .setDescription(
+            `Preis: **${price}** • Cut: **${cut}%** • Mindest: **${min} Pulver**\n\n` +
+            parts[p].join("\n")
+          )
+          .setFooter({ text: `Ausgelöst von: ${actorName}` });
+
+        if (p === 0) {
+          partEmbed.addFields(
+            { name: "Summe (Brutto)", value: money(totalGross), inline: true },
+            { name: "Summe Schwarzgeld", value: money(totalSchwarz), inline: true },
+            { name: "Summe Auszahlung (Netto)", value: money(totalNet), inline: true },
+            { name: "Auszahlbares Pulver", value: money(totalPayoutablePulver), inline: true }
+          );
+        }
+
+        embeds.push(partEmbed);
+      }
+
+      const ok = await sendEmbedsToReports(i.guild, embeds);
+      if (!ok) return i.editReply("❌ Konnte nicht in **#lager-reports** posten (Rechte/ID prüfen).");
+
+      return i.editReply("✅ Report wurde in **#lager-reports** gepostet.");
+    }
+
+    /* ===== AUSBEZAHLT ===== */
+    if (sub === "ausbezahlt") {
+      const targetUser = i.options.getUser("user", true);
+      const betrag = i.options.getInteger("betrag") || 0;
+
+      const targetName = getBestName(i, targetUser);
+
+      const result = await post({
+        action: "addTransaction",
+        discordId: targetUser.id,
+        name: targetName,
+        channel: i.channel?.name || i.channelId,
+        type: "PAID",
+        amount: betrag,
+        meta: { paidBy: actorName }
+      });
+
+      if (!result.ok) return i.editReply(`❌ Sheet Fehler: ${result.error}`);
+
+      await post({ action: "writeWeeklySummary" });
+
+      return i.editReply(`✅ Ausbezahlt markiert: **${targetName}**`);
+    }
+
+    /* ===== NORMALE BUCHUNGEN ===== */
+    if (!ROUTE_CHANNEL_IDS.includes(i.channelId)) {
+      return i.editReply("❌ Nur in Lager-Kanälen erlaubt.");
+    }
+
+    const menge = i.options.getInteger("menge");
+    const typ = i.options.getString("typ");
+
+    let type = null;
+    let amount = menge || 0;
+
+    if (sub === "injektion-rein") type = "INJ_IN";
+    if (sub === "injektion-raus") type = "INJ_OUT";
+    if (sub === "blue-rein") type = "PULVER_IN";
+    if (sub === "blue-raus") type = "PULVER_OUT";
+
+    if (sub === "wochen-abgabe") {
+      if (typ === "A") type = "WOCHENABGABE_A";
+      if (typ === "B") type = "WOCHENABGABE_B";
+      if (typ === "X") type = "BEFREIT_X";
+      amount = 0;
+    }
+
+    if (!type) return i.editReply("❌ Ungültiger Subcommand.");
+
+    const result = await post({
+      action: "addTransaction",
+      discordId: i.user.id,
+      name: actorName,
+      channel: i.channel?.name || i.channelId,
+      type,
+      amount
+    });
+
+    if (!result.ok) return i.editReply(`❌ Sheet Fehler: ${result.error}`);
+
+    await post({ action: "writeWeeklySummary" });
+
+    return i.editReply(`✅ Gebucht: ${type} ${amount}`);
+  } catch (err) {
+    console.error(err);
+    const msg = `❌ Bot Fehler: ${String(err).slice(0, 1500)}`;
+    if (i.deferred || i.replied) return i.editReply(msg);
+    return i.reply({ content: msg, ephemeral: true });
   }
-
-  if(i.customId==="resume"){
-    await post({action:"setBotPaused",paused:false,reason:""});
-  }
-
-  if(i.customId==="final"){
-    await post({action:"rolloverWeek"});
-    await post({action:"setBotPaused",paused:false,reason:""});
-  }
-
-  const st=await getState();
-  await i.message.edit({
-    embeds:[panelEmbed(st)],
-    components:[panelButtons(st)]
-  });
-
-  return i.editReply("✅ OK");
-}
-
-/* ---------- COMMANDS ---------- */
-
-if(!i.isChatInputCommand()) return;
-if(i.commandName!=="lager") return;
-
-await i.deferReply({ephemeral:true});
-
-const sub=i.options.getSubcommand(false);
-const admin=hasAdminRole(i);
-const state=await getState();
-
-/* Pause Block */
-if(state.paused && !admin)
-  return i.editReply("⏸ Prüfmodus aktiv");
-
-/* Admin only */
-if(["panel","report","config","ausbezahlt"].includes(sub)){
-  if(i.channelId!==ADMIN_CHANNEL_ID)
-    return i.editReply("❌ Nur #lager-admin");
-  if(!admin)
-    return i.editReply("❌ Keine Berechtigung");
-}
-
-/* PANEL */
-if(sub==="panel"){
-  const st=await getState();
-  await i.channel.send({
-    embeds:[panelEmbed(st)],
-    components:[panelButtons(st)]
-  });
-  return i.editReply("✅ Panel gepostet");
-}
-
-/* CONFIG */
-if(sub==="config"){
-  const c=await post({action:"getConfig"});
-  return i.editReply(JSON.stringify(c.data,null,2));
-}
-
-/* REPORT */
-if(sub==="report"){
-  const s=await post({action:"getWeeklySummary"});
-  if(!s.ok) return i.editReply("Sheet Fehler");
-
-  const lines=s.data.map(r=>
-    `${r.name} • Netto ${money(r.payout_net)}`
-  );
-
-  const parts=chunk(lines,25);
-  const ch=await i.guild.channels.fetch(REPORT_CHANNEL_ID);
-
-  for(const p of parts){
-    await ch.send({content:p.join("\n")});
-  }
-
-  return i.editReply("✅ Report gesendet");
-}
-
-/* AUSBEZAHLT */
-if(sub==="ausbezahlt"){
-  const u=i.options.getUser("user");
-  await post({
-    action:"addTransaction",
-    discordId:u.id,
-    name:getName(i,u),
-    channel:i.channel.name,
-    type:"PAID",
-    amount:0
-  });
-  await post({action:"writeWeeklySummary"});
-  return i.editReply("✅ markiert");
-}
-
-/* NORMAL BUCHUNGEN */
-
-if(!ROUTE_CHANNEL_IDS.includes(i.channelId))
-  return i.editReply("❌ falscher Channel");
-
-const menge=i.options.getInteger("menge");
-const typ=i.options.getString("typ");
-
-let type=null;
-if(sub==="blue-rein") type="PULVER_IN";
-if(sub==="blue-raus") type="PULVER_OUT";
-if(sub==="injektion-rein") type="INJ_IN";
-if(sub==="injektion-raus") type="INJ_OUT";
-if(sub==="wochen-abgabe"){
-  if(typ==="A") type="WOCHENABGABE_A";
-  if(typ==="B") type="WOCHENABGABE_B";
-  if(typ==="X") type="BEFREIT_X";
-}
-
-await post({
-  action:"addTransaction",
-  discordId:i.user.id,
-  name:getName(i,i.user),
-  channel:i.channel.name,
-  type,
-  amount:menge||0
 });
 
-await post({action:"writeWeeklySummary"});
-return i.editReply("✅ gebucht");
+/* ========= WEEKLY AUTO ARCHIVE ========= */
+cron.schedule("5 0 * * 1", async () => {
+  try {
+    await post({ action: "rolloverWeek" });
+    const ch = await client.channels.fetch(REPORT_CHANNEL_ID).catch(() => null);
+    if (ch) ch.send("📦 Wochenarchiv automatisch erstellt.");
+  } catch (e) {
+    console.error("Rollover Fehler", e);
+  }
+}, { timezone: "Europe/Zurich" });
 
-}catch(e){
-  console.error(e);
-  if(i.deferred) return i.editReply("❌ Fehler");
-}});
+client.once("ready", () => {
+  console.log(`🤖 Lagerbot online als ${client.user.tag}`);
+});
 
-/* ========= AUTO ARCHIV ========= */
-
-cron.schedule("5 0 * * 1", async()=>{
-  await post({action:"rolloverWeek"});
-},{timezone:"Europe/Zurich"});
-
-client.once("ready",()=>console.log("🤖 LagerBot online"));
 client.login(process.env.DISCORD_TOKEN);
