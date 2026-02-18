@@ -33,25 +33,41 @@ const command = new SlashCommandBuilder()
           .addChoices({ name: "A", value: "A" }, { name: "B", value: "B" }, { name: "X", value: "X" })
       )
   )
+
+  // ✅ Admin: Ausbezahlt
   .addSubcommand(sc =>
     sc.setName("ausbezahlt")
-      .setDescription("Markiert einen Member als ausbezahlt (für diese KW)")
+      .setDescription("Markiert einen Member als ausbezahlt")
       .addUserOption(o => o.setName("user").setDescription("Wer wurde ausbezahlt?").setRequired(true))
       .addIntegerOption(o => o.setName("betrag").setDescription("Optionaler Betrag").setRequired(false))
   )
+
+  // ✅ Admin: Report
   .addSubcommand(sc =>
     sc.setName("report")
       .setDescription("Postet den Wochenreport in #lager-reports")
       .addIntegerOption(o => o.setName("kw").setDescription("Optional: Kalenderwoche").setRequired(false))
   )
+
+  // ✅ Admin: Config
   .addSubcommand(sc =>
     sc.setName("config")
       .setDescription("Zeigt aktuelle Preise/Prozent/Mindest-Abgabe")
   )
-  // ✅ NEU: Admin Panel mit Buttons
+
+  // ✅ Admin: Panel (Buttons)
   .addSubcommand(sc =>
     sc.setName("panel")
       .setDescription("Zeigt das Wochenabschluss-Panel (Pause / Abschluss & Neustart)")
+  )
+
+  // ✅ Admin: bunker-set
+  .addSubcommand(sc =>
+    sc.setName("bunker-set")
+      .setDescription("Setzt den Bunkerbestand (Korrekturbuchung)")
+      .addIntegerOption(o => o.setName("injektion").setDescription("Ziel-Bestand Injektionen").setRequired(true))
+      .addIntegerOption(o => o.setName("pulver").setDescription("Ziel-Bestand Blaupulver").setRequired(true))
+      .addStringOption(o => o.setName("grund").setDescription("Optional: Grund/Notiz").setRequired(false))
   );
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
@@ -62,7 +78,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
       Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.GUILD_ID),
       { body: [command.toJSON()] }
     );
-    console.log("✅ /lager Commands registriert (panel inkl.)");
+    console.log("✅ /lager Commands registriert (inkl. bunker-set/panel)");
   } catch (e) {
     console.error("❌ Deploy Fehler:", e);
   }
