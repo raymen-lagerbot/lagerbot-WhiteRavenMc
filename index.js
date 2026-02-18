@@ -14,22 +14,19 @@ const fetch = (...args) =>
 
 /* ========= CHANNEL CONFIG ========= */
 
-// Lager-Buchungs-Channels (deine 7 IDs)
+// ✅ Nur die 5 echten Buchungs-Channels (du wolltest ausbezahlt/routen nicht mehr)
 const ROUTE_CHANNEL_IDS = [
   "1471986598886510653", // injektion-rein
   "1471986731484975135", // injektion-raus
   "1472654099110563880", // blue-rein
   "1472654198779674769", // blue-raus
-  "1472703728757772552", // ausbezahlt (alt)
-  "1472339361789116589", // wochen-abgabe
-  "1472703883854872586"  // routen-buchungen
+  "1472339361789116589"  // wochen-abgabe
 ];
 
-// Deine neuen Channels
 const REPORT_CHANNEL_ID = "1473018767071252521"; // lager-reports
 const ADMIN_CHANNEL_ID  = "1473018857626272018"; // lager-admin
 
-// ✅ Deine Rollen-IDs (stabil)
+// ✅ Deine Rollen-IDs
 const ADMIN_ROLE_IDS = [
   "1473402644843200532", // Leitung
   "1473406736370241709"  // Buchhaltung
@@ -61,7 +58,7 @@ async function post(payload) {
 
 async function getBotState() {
   const r = await post({ action: "getBotState" });
-  if (!r.ok) return { paused: false, reason: "" }; // Fallback: lieber nicht blocken
+  if (!r.ok) return { paused: false, reason: "" };
   return r.data || { paused: false, reason: "" };
 }
 
@@ -76,7 +73,6 @@ function hasAdminRole(i) {
 function getBestName(i, user) {
   if (!user) return "Unknown";
 
-  // actor
   if (i.user?.id === user.id) {
     return (
       i.member?.nickname ||
@@ -86,14 +82,12 @@ function getBestName(i, user) {
     );
   }
 
-  // target
   const cached = i.guild?.members?.cache?.get(user.id);
   return cached?.nickname || user.globalName || user.username;
 }
 
 function money(n) {
-  const num = Number(n || 0);
-  return num.toLocaleString("de-CH");
+  return Number(n || 0).toLocaleString("de-CH");
 }
 
 function chunk(arr, size) {
@@ -221,7 +215,7 @@ client.on("interactionCreate", async (i) => {
     }
 
     // Admin-only subs
-    const adminOnlySubs = new Set(["config", "report", "ausbezahlt", "panel"]);
+    const adminOnlySubs = new Set(["config", "report", "ausbezahlt", "panel", "bunker-set"]);
     if (adminOnlySubs.has(sub)) {
       if (i.channelId !== ADMIN_CHANNEL_ID) {
         return i.editReply("❌ Bitte im **#lager-admin** verwenden.");
@@ -348,6 +342,64 @@ client.on("interactionCreate", async (i) => {
       await post({ action: "writeWeeklySummary" });
 
       return i.editReply(`✅ Ausbezahlt markiert: **${targetName}**`);
+    }
+
+    /* ===== BUNKER-SET (ADMIN) ===== */
+    if (sub === "bunker-set") {
+      const targetInj = i.options.getInteger("injektion", true);
+      const targetPulver = i.options.getInteger("pulver", true);
+      const grund = i.options.getString("grund") || "Inventur/Korrektur";
+
+      const cur = await post({ action: "getBunkerStock" });
+      if (!cur.ok) return i.editReply(`❌ Sheet Fehler (getBunkerStock): ${cur.error}`);
+
+      const currentInj = Number(cur.data?.injektion || 0);
+      const currentPulver = Number(cur.data?.pulver || 0);
+
+      const diffInj = Number(targetInj) - currentInj;
+      const diffPulver = Number(targetPulver) - currentPulver;
+
+      if (diffInj === 0 && diffPulver === 0) {
+        return i.editReply(`✅ Bunker bleibt gleich. (Inj ${currentInj}, Pulver ${currentPulver})`);
+      }
+
+      if (diffInj !== 0) {
+        const r1 = await post({
+          action: "addTransaction",
+          discordId: i.user.id,
+          name: actorName,
+          channel: i.channel?.name || i.channelId,
+          type: "BUNKER_INJ_ADJ",
+          amount: diffInj,
+          meta: { reason: grund, from: currentInj, to: targetInj }
+        });
+        if (!r1.ok) return i.editReply(`❌ Sheet Fehler (BUNKER_INJ_ADJ): ${r1.error}`);
+      }
+
+      if (diffPulver !== 0) {
+        const r2 = await post({
+          action: "addTransaction",
+          discordId: i.user.id,
+          name: actorName,
+          channel: i.channel?.name || i.channelId,
+          type: "BUNKER_PULVER_ADJ",
+          amount: diffPulver,
+          meta: { reason: grund, from: currentPulver, to: targetPulver }
+        });
+        if (!r2.ok) return i.editReply(`❌ Sheet Fehler (BUNKER_PULVER_ADJ): ${r2.error}`);
+      }
+
+      const upd = await post({ action: "writeWeeklySummary" });
+      if (!upd.ok) return i.editReply(`❌ Sheet Fehler (writeWeeklySummary): ${upd.error}`);
+
+      const sign = (n) => (n > 0 ? `+${n}` : `${n}`);
+
+      return i.editReply(
+        `✅ **Bunker gesetzt**\n` +
+        `• Injektion: ${currentInj} → ${targetInj} (Diff ${sign(diffInj)})\n` +
+        `• Pulver: ${currentPulver} → ${targetPulver} (Diff ${sign(diffPulver)})\n` +
+        `• Grund: ${grund}`
+      );
     }
 
     /* ===== NORMALE BUCHUNGEN ===== */
